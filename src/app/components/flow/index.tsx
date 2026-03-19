@@ -59,7 +59,7 @@ const pathLeafName = (value: string) => {
 };
 
 const trimPubkeyDisplay = (value: string) => {
-  const trimmedValue = value.replace(/0+$/g, '');
+  const trimmedValue = value.replace(/0+=+$/g, '');
   return trimmedValue.length > 0 ? trimmedValue : value;
 };
 
