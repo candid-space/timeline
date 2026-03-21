@@ -63,53 +63,35 @@ const trimPubkeyDisplay = (value: string) => {
   return trimmedValue.length > 0 ? trimmedValue : value;
 };
 
-const BASE64_SEGMENT_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+const MAX_PATH_PAYLOAD_LENGTH = 44;
+const PAD_PATTERN = '/00000000';
+const BASE64_PATH_INPUT_PATTERN = /[^A-Za-z0-9+/=]/g;
 
-const toPaddedBase64 = (value: string) => {
-  const paddingLength = (4 - (value.length % 4)) % 4;
-  return `${value}${'='.repeat(paddingLength)}`;
+const sanitizePathInput = (value: string) => {
+  const withoutProtocol = value.trim().replace(/^https?:\/\//, '');
+  const stripped = withoutProtocol.replace(/^\/+/, '');
+  const normalizedSlashes = stripped.replace(/\/{2,}/g, '/');
+  const allowedOnly = normalizedSlashes.replace(BASE64_PATH_INPUT_PATTERN, '');
+  const withoutTrailingPad = allowedOnly.replace(/[0=]+$/g, '').replace(/\/+$/g, '');
+  return withoutTrailingPad.slice(0, MAX_PATH_PAYLOAD_LENGTH);
 };
 
-const encodePathSegment = (segment: string) => {
-  const trimmedSegment = segment.trim();
+const toResolvedPath = (value: string) => {
+  const seed = sanitizePathInput(value);
+  let payload = seed;
 
-  if (!trimmedSegment) {
-    return '';
+  while (payload.length < MAX_PATH_PAYLOAD_LENGTH - 1) {
+    payload += PAD_PATTERN;
   }
 
-  const candidate = toPaddedBase64(trimmedSegment);
-  if (BASE64_SEGMENT_PATTERN.test(candidate)) {
-    try {
-      atob(candidate);
-      return candidate;
-    } catch {
-      // Not valid base64 content; encode as text below.
-    }
-  }
-
-  const utf8Bytes = new TextEncoder().encode(trimmedSegment);
-  const binaryValue = Array.from(utf8Bytes, (byte) => String.fromCharCode(byte)).join('');
-  return btoa(binaryValue);
+  payload = payload.slice(0, MAX_PATH_PAYLOAD_LENGTH - 1);
+  return `/${payload}=`;
 };
 
-const normalizePath = (value: string) => {
-  const stripped = value.trim().replace(/^https?:\/\//, '');
-
-  if (!stripped) {
-    return '/';
-  }
-
-  const segments = stripped
-    .replace(/^\/+/, '')
-    .split('/')
-    .map(encodePathSegment)
-    .filter(Boolean);
-
-  if (segments.length === 0) {
-    return '/';
-  }
-
-  return `/${segments.join('/')}`;
+const toDisplayPath = (value?: string) => {
+  const resolved = toResolvedPath(value ?? '/');
+  const visible = resolved.slice(1).replace(/[0=]+$/g, '').replace(/\/+$/g, '');
+  return visible ? `/${visible}` : '/';
 };
 
 const PathAddressBar = ({
@@ -140,11 +122,12 @@ const PathAddressBar = ({
   }, [isEditing]);
 
   const breadcrumbParts = useMemo(() => {
-    if (value === '/') {
+    const visible = toDisplayPath(value);
+    if (visible === '/') {
       return [];
     }
 
-    return value.split('/').filter(Boolean);
+    return visible.split('/').filter(Boolean);
   }, [value]);
 
   const onCommit = useCallback(() => {
@@ -170,6 +153,7 @@ const PathAddressBar = ({
           style={{ fontFamily: 'monospace, monospace' }}
           value={draftPath}
           placeholder="/"
+          maxlength={MAX_PATH_PAYLOAD_LENGTH}
           onIonInput={(event) => setDraftPath(event.detail.value ?? '')}
           onIonBlur={onCommit}
           onKeyDown={(event) => {
@@ -292,18 +276,13 @@ function FlowMap({
 
   const handlePathChange = useCallback(
     (value: string) => {
-      setForKey(normalizePath(value));
+      setForKey(toResolvedPath(value));
     },
     [setForKey],
   );
 
   const displayedPath = useMemo(() => {
-    const trimmed = (forKey ?? '').trim();
-    if (!trimmed || !trimmed.startsWith('/')) {
-      return '/';
-    }
-
-    return normalizePath(trimmed);
+    return toDisplayPath(forKey);
   }, [forKey]);
 
   const [collapsedToImmediate, setCollapsedToImmediate] = useState(false);
