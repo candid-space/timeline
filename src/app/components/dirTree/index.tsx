@@ -52,7 +52,7 @@ const pathLeafName = (value: string) => {
   }
 
   const parts = value.split('/').filter(Boolean);
-  return parts.at(-1) ?? value;
+  return parts[parts.length - 1] ?? value;
 };
 
 const trimPubkeyDisplay = (value: string) => {
