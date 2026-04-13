@@ -92,17 +92,6 @@ const Explore = () => {
   }, [navigatorPublicKey, requestPkTransactions, transactionRange.limit]);
 
   useEffect(() => {
-    if (!focusTransactionId || mode !== 'feed') {
-      return;
-    }
-
-    window.setTimeout(() => {
-      const target = document.getElementById(`feed-item-${focusTransactionId}`);
-      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 50);
-  }, [focusTransactionId, mode, transactions]);
-
-  useEffect(() => {
     let cleanup = () => {};
     const timeoutId = window.setTimeout(() => {
       if (!navigatorPublicKey) {
@@ -275,7 +264,6 @@ const Explore = () => {
                   {mode === 'feed' && (
                     <MemoFeed
                       transactions={transactions}
-                      currentPath={whichKey}
                       onLoadMore={loadMore}
                       canLoadMore={canLoadMore}
                       focusTransactionId={focusTransactionId}
@@ -283,6 +271,11 @@ const Explore = () => {
                         setNavigatorPublicKey(nextKey);
                         setPeekGraphKey('/');
                         setMode('feed');
+                      }}
+                      onActivePathChange={(path) => {
+                        if (mode === 'feed') {
+                          setPeekGraphKey(path);
+                        }
                       }}
                     />
                   )}

@@ -16,6 +16,13 @@ type FeedItem = Transaction & {
   txId: string;
 };
 
+type FeedEntry = {
+  entryId: string;
+  tx: FeedItem;
+  kind: 'memo' | 'drill_in' | 'drill_out';
+  path: string | null;
+};
+
 const normalizePath = (value?: string) => {
   if (!value?.startsWith('/')) {
     return null;
@@ -30,14 +37,6 @@ const normalizePath = (value?: string) => {
 };
 
 const isSpatialKey = (value?: string) => Boolean(value?.startsWith('/'));
-
-const isWithinPath = (path: string, targetPath: string) => {
-  if (path === '/') {
-    return true;
-  }
-
-  return targetPath.startsWith(path);
-};
 
 const byNewest = (a: FeedItem, b: FeedItem) => {
   const aSeries = a.series ?? 0;
@@ -54,6 +53,21 @@ const byNewest = (a: FeedItem, b: FeedItem) => {
   return a.txId < b.txId ? 1 : -1;
 };
 
+const byEntryOrder = (a: FeedEntry, b: FeedEntry) => {
+  const txnComparison = byNewest(a.tx, b.tx);
+  if (txnComparison !== 0) {
+    return txnComparison;
+  }
+
+  const rank = {
+    memo: 0,
+    drill_in: 1,
+    drill_out: 2,
+  } as const;
+
+  return rank[a.kind] - rank[b.kind];
+};
+
 export const normalizeFeedTransactions = (transactions: Transaction[]) => {
   const unique = new Map<string, FeedItem>();
 
@@ -68,37 +82,60 @@ export const normalizeFeedTransactions = (transactions: Transaction[]) => {
   return Array.from(unique.values()).sort(byNewest).slice(0, 500);
 };
 
+const buildEntries = (transactions: Transaction[]) => {
+  const entries: FeedEntry[] = [];
+
+  normalizeFeedTransactions(transactions).forEach((tx) => {
+    entries.push({
+      entryId: `${tx.txId}:memo`,
+      tx,
+      kind: 'memo',
+      path: normalizePath(tx.to),
+    });
+
+    if (!isSpatialKey(tx.to)) {
+      entries.push({
+        entryId: `${tx.txId}:drill-in`,
+        tx,
+        kind: 'drill_in',
+        path: null,
+      });
+    }
+
+    if (tx.from && !isSpatialKey(tx.from)) {
+      entries.push({
+        entryId: `${tx.txId}:drill-out`,
+        tx,
+        kind: 'drill_out',
+        path: null,
+      });
+    }
+  });
+
+  return entries.sort(byEntryOrder);
+};
+
 const MemoFeed = ({
   transactions,
-  currentPath,
   canLoadMore,
   onLoadMore,
   focusTransactionId,
   onSwitchNavigator,
+  onActivePathChange,
 }: {
   transactions: Transaction[];
-  currentPath: string;
   canLoadMore: boolean;
   onLoadMore: () => void;
   focusTransactionId?: string | null;
   onSwitchNavigator: (publicKey: string) => void;
+  onActivePathChange: (path: string) => void;
 }) => {
-  const normalizedPath = normalizePath(currentPath) ?? '/';
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const loadRequestedForLengthRef = useRef<number>(-1);
   const [activeIndex, setActiveIndex] = useState(0);
   const [renderedCount, setRenderedCount] = useState(1);
 
-  const feedItems = useMemo(() => {
-    return normalizeFeedTransactions(transactions).filter((item) => {
-      const toPath = normalizePath(item.to);
-      if (toPath) {
-        return isWithinPath(normalizedPath, toPath);
-      }
-
-      return true;
-    });
-  }, [transactions, normalizedPath]);
+  const feedEntries = useMemo(() => buildEntries(transactions), [transactions]);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -107,14 +144,23 @@ const MemoFeed = ({
     if (scrollRef.current) {
       scrollRef.current.scrollTo({ top: 0, behavior: 'auto' });
     }
-  }, [normalizedPath, transactions]);
+  }, [transactions]);
+
+  useEffect(() => {
+    const activeEntry = feedEntries[activeIndex];
+    if (activeEntry?.path) {
+      onActivePathChange(activeEntry.path);
+    }
+  }, [activeIndex, feedEntries, onActivePathChange]);
 
   useEffect(() => {
     if (!focusTransactionId || !scrollRef.current) {
       return;
     }
 
-    const index = feedItems.findIndex((item) => item.txId === focusTransactionId);
+    const index = feedEntries.findIndex(
+      (entry) => entry.tx.txId === focusTransactionId && entry.kind === 'memo',
+    );
     if (index < 0) {
       return;
     }
@@ -123,25 +169,25 @@ const MemoFeed = ({
     const viewportHeight = scrollRef.current.clientHeight;
     scrollRef.current.scrollTo({ top: viewportHeight * index, behavior: 'smooth' });
     setActiveIndex(index);
-  }, [feedItems, focusTransactionId]);
+  }, [feedEntries, focusTransactionId]);
 
   useEffect(() => {
-    if (activeIndex >= renderedCount - 1 && renderedCount < feedItems.length) {
-      setRenderedCount((previous) => Math.min(feedItems.length, previous + 1));
+    if (activeIndex >= renderedCount - 1 && renderedCount < feedEntries.length) {
+      setRenderedCount((previous) => Math.min(feedEntries.length, previous + 1));
       return;
     }
 
     if (
-      activeIndex >= feedItems.length - 1 &&
+      activeIndex >= feedEntries.length - 1 &&
       canLoadMore &&
-      loadRequestedForLengthRef.current !== feedItems.length
+      loadRequestedForLengthRef.current !== feedEntries.length
     ) {
-      loadRequestedForLengthRef.current = feedItems.length;
+      loadRequestedForLengthRef.current = feedEntries.length;
       onLoadMore();
     }
-  }, [activeIndex, renderedCount, feedItems.length, canLoadMore, onLoadMore]);
+  }, [activeIndex, renderedCount, feedEntries.length, canLoadMore, onLoadMore]);
 
-  const visibleItems = feedItems.slice(0, renderedCount);
+  const visibleEntries = feedEntries.slice(0, renderedCount);
 
   return (
     <div
@@ -159,78 +205,100 @@ const MemoFeed = ({
         scrollSnapType: 'y mandatory',
       }}
     >
-      {visibleItems.map((item) => {
-        const content = getMemoContent(item.memo);
-        const canDrillIn = !isSpatialKey(item.to);
-        const canDrillOut = Boolean(item.from && !isSpatialKey(item.from));
+      {visibleEntries.map((entry) => {
+        const { tx } = entry;
+        const content = getMemoContent(tx.memo);
 
         return (
-          <div key={item.txId} id={`feed-item-${item.txId}`} style={{ scrollSnapAlign: 'start', minHeight: 'calc(100vh - 220px)' }}>
+          <div
+            key={entry.entryId}
+            id={`feed-item-${entry.entryId}`}
+            style={{ scrollSnapAlign: 'start', minHeight: 'calc(100vh - 220px)' }}
+          >
             <IonCard>
               <IonCardHeader>
-                <IonCardSubtitle>{item.txId.slice(0, 14)}…</IonCardSubtitle>
+                <IonCardSubtitle>{tx.txId.slice(0, 14)}…</IonCardSubtitle>
                 <IonCardTitle style={{ fontSize: 14 }}>
-                  series: {item.series ?? 'n/a'} · time: {item.time}
+                  series: {tx.series ?? 'n/a'} · time: {tx.time}
                 </IonCardTitle>
               </IonCardHeader>
               <IonCardContent>
-                <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-                  {canDrillIn && (
-                    <IonButton size="small" fill="outline" onClick={() => onSwitchNavigator(item.to)}>
+                {entry.kind === 'drill_in' && (
+                  <>
+                    <IonText>
+                      <p style={{ marginTop: 0 }}>Drill-in entry: switch to destination navigator key.</p>
+                    </IonText>
+                    <IonButton size="small" fill="outline" onClick={() => onSwitchNavigator(tx.to)}>
                       Drill in
                     </IonButton>
-                  )}
-                  {canDrillOut && (
+                  </>
+                )}
+
+                {entry.kind === 'drill_out' && (
+                  <>
+                    <IonText>
+                      <p style={{ marginTop: 0 }}>Drill-out entry: switch to source navigator key.</p>
+                    </IonText>
                     <IonButton
                       size="small"
                       fill="outline"
-                      onClick={() => onSwitchNavigator(item.from as string)}
+                      onClick={() => onSwitchNavigator(tx.from as string)}
                     >
                       Drill out
                     </IonButton>
-                  )}
-                </div>
-
-                {content.type === 'empty' && (
-                  <IonText color="medium">
-                    <p style={{ margin: 0, fontSize: 12 }}>{content.text}</p>
-                  </IonText>
+                  </>
                 )}
 
-                {content.type === 'text' && (
-                  <IonText>
-                    <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{content.text}</p>
-                  </IonText>
-                )}
+                {entry.kind === 'memo' && (
+                  <>
+                    {content.type === 'empty' && (
+                      <IonText color="medium">
+                        <p style={{ margin: 0, fontSize: 12 }}>{content.text}</p>
+                      </IonText>
+                    )}
 
-                {content.type === 'url' && (
-                  <iframe
-                    title="Memo web content"
-                    src={content.url}
-                    style={{ width: '100%', height: '65vh', border: 'none', borderRadius: 8 }}
-                    referrerPolicy="strict-origin-when-cross-origin"
-                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
-                  />
-                )}
+                    {content.type === 'text' && (
+                      <IonText>
+                        <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{content.text}</p>
+                      </IonText>
+                    )}
 
-                {content.type === 'youtube' && (
-                  <div style={{ position: 'relative', width: '100%', paddingBottom: '177.78%' }}>
-                    <iframe
-                      title="Memo YouTube short"
-                      src={`https://www.youtube.com/embed/${content.videoId}?autoplay=1&mute=1&playsinline=1`}
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        width: '100%',
-                        height: '100%',
-                        border: 'none',
-                      }}
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                      referrerPolicy="strict-origin-when-cross-origin"
-                      allowFullScreen
-                    />
-                  </div>
+                    {content.type === 'url' && (
+                      <iframe
+                        title="Memo web content"
+                        src={content.url}
+                        style={{ width: '100%', height: '65vh', border: 'none', borderRadius: 8 }}
+                        referrerPolicy="strict-origin-when-cross-origin"
+                        sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                      />
+                    )}
+
+                    {content.type === 'youtube' && (
+                      <div
+                        style={{
+                          position: 'relative',
+                          width: '100%',
+                          paddingBottom: '177.78%',
+                        }}
+                      >
+                        <iframe
+                          title="Memo YouTube short"
+                          src={`https://www.youtube.com/embed/${content.videoId}?autoplay=1&mute=1&playsinline=1`}
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            width: '100%',
+                            height: '100%',
+                            border: 'none',
+                          }}
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                          referrerPolicy="strict-origin-when-cross-origin"
+                          allowFullScreen
+                        />
+                      </div>
+                    )}
+                  </>
                 )}
               </IonCardContent>
             </IonCard>
