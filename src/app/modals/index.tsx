@@ -2,30 +2,56 @@ import { PageShell } from '../components/pageShell';
 import { useContext, useEffect, useMemo, useState } from 'react';
 import { AppContext } from '../utils/appContext';
 import DirTree from '../components/dirTree';
-import { IonIcon, useIonModal } from '@ionic/react';
-import { terminalOutline, addCircleOutline } from 'ionicons/icons';
+import MemoFeed from '../components/memoFeed';
+import { IonButton, IonIcon, useIonModal } from '@ionic/react';
+import { terminalOutline, addCircleOutline, gitBranchOutline, listOutline } from 'ionicons/icons';
 import WebsocketConsole from './console';
 import Send from './send';
 import { indexTransactionsToGraph } from '../utils/indexer';
+import { Transaction } from '../utils/appTypes';
 
 const toDisplayPath = (value: string) => {
   const trimmedValue = value.replace(/0+=+$/g, '');
   return trimmedValue || '/';
 };
 
+const buildPathSegments = (value: string) => {
+  const normalized = toDisplayPath(value);
+  if (normalized === '/') {
+    return [];
+  }
+
+  const parts = normalized.split('/').filter(Boolean);
+  let currentPath = '/';
+
+  return parts.map((segment) => {
+    currentPath = `${currentPath}${segment}/`;
+    return {
+      label: segment,
+      value: currentPath,
+    };
+  });
+};
+
 const Explore = () => {
   const {
-    colorScheme,
     graph,
     setGraph,
+    tipHeader,
     navigatorPublicKey,
     transactionRange,
     requestPkTransactions,
   } =
     useContext(AppContext);
 
+  const [mode, setMode] = useState<'feed' | 'tree'>('feed');
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [fetchStartHeight, setFetchStartHeight] = useState<number>(0);
+  const [canLoadMore, setCanLoadMore] = useState<boolean>(true);
+  const [focusTransactionId, setFocusTransactionId] = useState<string | null>(null);
   const [peekGraphKey, setPeekGraphKey] = useState<string>('/');
   const whichKey = useMemo(() => toDisplayPath(peekGraphKey), [peekGraphKey]);
+  const clickableSegments = useMemo(() => buildPathSegments(whichKey), [whichKey]);
 
   const [presentSendModal, dismissSend] = useIonModal(Send, {
     onDismiss: (data: string, role: string) => dismissSend(data, role),
@@ -39,23 +65,69 @@ const Explore = () => {
     },
   );
 
+  const fetchTransactions = (
+    startHeight: number,
+    endHeight: number,
+    replace: boolean,
+  ) => {
+    if (!navigatorPublicKey) {
+      return;
+    }
+
+    requestPkTransactions(
+      navigatorPublicKey,
+      (nextTransactions) => {
+        setTransactions((previous) => {
+          const merged = replace ? nextTransactions : [...previous, ...nextTransactions];
+          setGraph(indexTransactionsToGraph(merged, navigatorPublicKey));
+          return merged;
+        });
+        setCanLoadMore(nextTransactions.length >= transactionRange.limit);
+      },
+      {
+        startHeight,
+        endHeight,
+        limit: transactionRange.limit,
+      },
+    );
+  };
+
+  useEffect(() => {
+    if (!focusTransactionId || mode !== 'feed') {
+      return;
+    }
+
+    window.setTimeout(() => {
+      const target = document.getElementById(`feed-item-${focusTransactionId}`);
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 50);
+  }, [focusTransactionId, mode, transactions]);
+
   useEffect(() => {
     let cleanup = () => {};
     const timeoutId = window.setTimeout(() => {
       if (!navigatorPublicKey) {
         setGraph(null);
+        setTransactions([]);
+        setCanLoadMore(false);
         return;
       }
 
+      const latestStartHeight = tipHeader?.header.height
+        ? tipHeader.header.height + 1
+        : transactionRange.startHeight;
+      setFetchStartHeight(latestStartHeight);
       cleanup =
         requestPkTransactions(
           navigatorPublicKey,
           (transactions) => {
+            setTransactions(transactions);
+            setCanLoadMore(transactions.length >= transactionRange.limit);
             setGraph(indexTransactionsToGraph(transactions, navigatorPublicKey));
           },
           {
-            startHeight: transactionRange.startHeight,
-            endHeight: transactionRange.endHeight,
+            startHeight: latestStartHeight,
+            endHeight: 0,
             limit: transactionRange.limit,
           },
         ) ?? cleanup;
@@ -69,6 +141,7 @@ const Explore = () => {
     navigatorPublicKey,
     requestPkTransactions,
     setGraph,
+    tipHeader?.header.height,
     transactionRange.endHeight,
     transactionRange.limit,
     transactionRange.startHeight,
@@ -83,11 +156,13 @@ const Explore = () => {
         requestPkTransactions(
           navigatorPublicKey,
           (transactions) => {
+            setTransactions(transactions);
+            setCanLoadMore(transactions.length >= transactionRange.limit);
             setGraph(indexTransactionsToGraph(transactions, navigatorPublicKey));
           },
           {
-            startHeight: transactionRange.startHeight,
-            endHeight: transactionRange.endHeight,
+            startHeight: tipHeader?.header.height ? tipHeader.header.height + 1 : transactionRange.startHeight,
+            endHeight: 0,
             limit: transactionRange.limit,
           },
         );
@@ -103,11 +178,23 @@ const Explore = () => {
     navigatorPublicKey,
     requestPkTransactions,
     setGraph,
+    tipHeader?.header.height,
     transactionRange.endHeight,
     transactionRange.limit,
     transactionRange.startHeight,
     whichKey,
   ]);
+
+  const loadMore = () => {
+    if (!canLoadMore) {
+      return;
+    }
+
+    const nextEndHeight = fetchStartHeight - 1;
+    const nextStartHeight = Math.max(1, nextEndHeight - transactionRange.limit + 1);
+    setFetchStartHeight(nextStartHeight);
+    fetchTransactions(nextStartHeight, nextEndHeight, false);
+  };
 
   return (
     <PageShell
@@ -130,14 +217,74 @@ const Explore = () => {
         <>
           {!!whichKey && (
             <>
+              <div
+                style={{
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 20,
+                  background: 'var(--ion-background-color)',
+                  borderBottom: '1px solid var(--ion-color-step-150)',
+                  padding: '8px 0',
+                  marginBottom: 8,
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 8,
+                    alignItems: 'center',
+                    marginBottom: 8,
+                  }}
+                >
+                  <IonButton size="small" fill={mode === 'feed' ? 'solid' : 'outline'} onClick={() => setMode('feed')}>
+                    <IonIcon icon={listOutline} slot="start" />
+                    Feed
+                  </IonButton>
+                  <IonButton size="small" fill={mode === 'tree' ? 'solid' : 'outline'} onClick={() => setMode('tree')}>
+                    <IonIcon icon={gitBranchOutline} slot="start" />
+                    Tree
+                  </IonButton>
+                </div>
+                <div style={{ fontFamily: 'monospace, monospace', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  <button type="button" onClick={() => setPeekGraphKey('/')} style={{ border: 'none', background: 'transparent', color: 'var(--ion-color-primary)', textDecoration: 'underline' }}>
+                    ..
+                  </button>
+                  <code>/</code>
+                  {clickableSegments.map((segment, index) => (
+                    <div key={segment.value} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <button type="button" onClick={() => setPeekGraphKey(segment.value)} style={{ border: 'none', background: 'transparent', color: 'var(--ion-color-primary)', textDecoration: 'underline' }}>
+                        {segment.label}
+                      </button>
+                      {index < clickableSegments.length - 1 && <code>/</code>}
+                    </div>
+                  ))}
+                </div>
+              </div>
               {!!graph && (
-                <DirTree
-                  forKey={whichKey}
-                  nodes={graph.nodes ?? []}
-                  links={graph.links ?? []}
-                  setForKey={setPeekGraphKey}
-                  colorScheme={colorScheme}
-                />
+                <>
+                  {mode === 'tree' && (
+                    <DirTree
+                      forKey={whichKey}
+                      nodes={graph.nodes ?? []}
+                      links={graph.links ?? []}
+                      setForKey={setPeekGraphKey}
+                      onLeafOpen={(txId) => {
+                        setMode('feed');
+                        setFocusTransactionId(txId);
+                      }}
+                    />
+                  )}
+                  {mode === 'feed' && (
+                    <MemoFeed
+                      transactions={transactions}
+                      currentPath={whichKey}
+                      onDrill={setPeekGraphKey}
+                      onLoadMore={loadMore}
+                      canLoadMore={canLoadMore}
+                    />
+                  )}
+                </>
               )}
             </>
           )}
