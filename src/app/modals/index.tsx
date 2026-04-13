@@ -16,6 +16,10 @@ const toDisplayPath = (value: string) => {
 };
 
 const buildPathSegments = (value: string) => {
+  if (!value.startsWith('/')) {
+    return [];
+  }
+
   const normalized = toDisplayPath(value);
   if (normalized === '/') {
     return [];
@@ -51,8 +55,10 @@ const Explore = () => {
   const [canLoadMore, setCanLoadMore] = useState<boolean>(true);
   const [focusTransactionId, setFocusTransactionId] = useState<string | null>(null);
   const [peekGraphKey, setPeekGraphKey] = useState<string>('/');
+  const [breadcrumbPath, setBreadcrumbPath] = useState<string>('../');
+  const [rangeEndHeight, setRangeEndHeight] = useState<number>(0);
   const whichKey = useMemo(() => toDisplayPath(peekGraphKey), [peekGraphKey]);
-  const clickableSegments = useMemo(() => buildPathSegments(whichKey), [whichKey]);
+  const clickableSegments = useMemo(() => buildPathSegments(breadcrumbPath), [breadcrumbPath]);
 
   const [presentSendModal, dismissSend] = useIonModal(Send, {
     onDismiss: (data: string, role: string) => dismissSend(data, role),
@@ -81,7 +87,18 @@ const Explore = () => {
         setTransactions((previous) =>
           replace ? nextTransactions : [...previous, ...nextTransactions],
         );
-        setCanLoadMore(nextTransactions.length >= transactionRange.limit);
+        const nextCursor = nextTransactions
+          .map((tx) => tx.series)
+          .filter((series): series is number => Number.isFinite(series))
+          .reduce((minSeries, series) => Math.min(minSeries, series), Number.POSITIVE_INFINITY);
+        const effectiveNextStart = Number.isFinite(nextCursor)
+          ? nextCursor - 1
+          : endHeight - 1;
+        setFetchStartHeight(Math.max(rangeEndHeight, effectiveNextStart));
+        setCanLoadMore(
+          nextTransactions.length >= transactionRange.limit &&
+          effectiveNextStart >= rangeEndHeight,
+        );
       },
       {
         startHeight,
@@ -89,7 +106,7 @@ const Explore = () => {
         limit: transactionRange.limit,
       },
     );
-  }, [navigatorPublicKey, requestPkTransactions, transactionRange.limit]);
+  }, [navigatorPublicKey, rangeEndHeight, requestPkTransactions, transactionRange.limit]);
 
   useEffect(() => {
     let cleanup = () => {};
@@ -97,27 +114,18 @@ const Explore = () => {
       if (!navigatorPublicKey) {
         setGraph(null);
         setTransactions([]);
+        setBreadcrumbPath('../');
         setCanLoadMore(false);
         return;
       }
 
-      const latestStartHeight = tipHeader?.header.height
-        ? tipHeader.header.height + 1
-        : transactionRange.startHeight;
-      setFetchStartHeight(latestStartHeight);
-      cleanup =
-        requestPkTransactions(
-          navigatorPublicKey,
-          (transactions) => {
-            setTransactions(transactions);
-            setCanLoadMore(transactions.length >= transactionRange.limit);
-          },
-          {
-            startHeight: latestStartHeight,
-            endHeight: 0,
-            limit: transactionRange.limit,
-          },
-        ) ?? cleanup;
+      const resolvedStartHeight = transactionRange.startHeight > 0
+        ? transactionRange.startHeight
+        : (tipHeader?.header.height ? tipHeader.header.height + 1 : 1);
+      const resolvedEndHeight = Math.max(0, transactionRange.endHeight);
+      setRangeEndHeight(resolvedEndHeight);
+      setFetchStartHeight(resolvedStartHeight);
+      fetchTransactions(resolvedStartHeight, resolvedEndHeight, true);
     }, 0);
 
     return () => {
@@ -129,9 +137,9 @@ const Explore = () => {
     requestPkTransactions,
     setGraph,
     tipHeader?.header.height,
-    transactionRange.endHeight,
-    transactionRange.limit,
     transactionRange.startHeight,
+    transactionRange.endHeight,
+    fetchTransactions,
   ]);
 
   useEffect(() => {
@@ -140,18 +148,12 @@ const Explore = () => {
         if (!navigatorPublicKey) {
           return;
         }
-        requestPkTransactions(
-          navigatorPublicKey,
-          (transactions) => {
-            setTransactions(transactions);
-            setCanLoadMore(transactions.length >= transactionRange.limit);
-          },
-          {
-            startHeight: tipHeader?.header.height ? tipHeader.header.height + 1 : transactionRange.startHeight,
-            endHeight: 0,
-            limit: transactionRange.limit,
-          },
-        );
+        if (transactionRange.startHeight > 0) {
+          return;
+        }
+
+        const liveStart = tipHeader?.header.height ? tipHeader.header.height + 1 : 1;
+        fetchTransactions(liveStart, rangeEndHeight, true);
       }
     };
 
@@ -164,9 +166,10 @@ const Explore = () => {
     navigatorPublicKey,
     requestPkTransactions,
     tipHeader?.header.height,
-    transactionRange.endHeight,
-    transactionRange.limit,
     transactionRange.startHeight,
+    transactionRange.endHeight,
+    fetchTransactions,
+    rangeEndHeight,
     whichKey,
   ]);
 
@@ -185,10 +188,9 @@ const Explore = () => {
     }
 
     const nextEndHeight = fetchStartHeight - 1;
-    const nextStartHeight = Math.max(1, nextEndHeight - transactionRange.limit + 1);
-    setFetchStartHeight(nextStartHeight);
+    const nextStartHeight = Math.max(rangeEndHeight, nextEndHeight - transactionRange.limit + 1);
     fetchTransactions(nextStartHeight, nextEndHeight, false);
-  }, [canLoadMore, fetchStartHeight, fetchTransactions, transactionRange.limit]);
+  }, [canLoadMore, fetchStartHeight, fetchTransactions, rangeEndHeight, transactionRange.limit]);
 
   return (
     <PageShell
@@ -225,13 +227,15 @@ const Explore = () => {
                 <div style={{ fontFamily: 'monospace, monospace', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                   <button type="button" onClick={() => {
                     setPeekGraphKey('/');
+                    setBreadcrumbPath('../');
                     if (mode === 'feed') {
                       setMode('tree');
                     }
                   }} style={{ border: 'none', background: 'transparent', color: 'var(--ion-color-primary)', textDecoration: 'underline' }}>
                     ..
                   </button>
-                  <code>/</code>
+                  {breadcrumbPath.startsWith('/') && <code>/</code>}
+                  {!breadcrumbPath.startsWith('/') && <code>{breadcrumbPath}</code>}
                   {clickableSegments.map((segment, index) => (
                     <div key={segment.value} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                       <button type="button" onClick={() => {
@@ -270,11 +274,14 @@ const Explore = () => {
                       onSwitchNavigator={(nextKey) => {
                         setNavigatorPublicKey(nextKey);
                         setPeekGraphKey('/');
+                        setBreadcrumbPath('../');
+                        setFocusTransactionId(null);
                         setMode('feed');
                       }}
                       onActivePathChange={(path) => {
+                        setBreadcrumbPath(path);
                         if (mode === 'feed') {
-                          setPeekGraphKey(path);
+                          setPeekGraphKey(path.startsWith('/') ? path : '/');
                         }
                       }}
                     />

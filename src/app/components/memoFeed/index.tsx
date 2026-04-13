@@ -20,7 +20,7 @@ type FeedEntry = {
   entryId: string;
   tx: FeedItem;
   kind: 'memo' | 'drill_in' | 'drill_out';
-  path: string | null;
+  path: string;
 };
 
 const normalizePath = (value?: string) => {
@@ -37,6 +37,14 @@ const normalizePath = (value?: string) => {
 };
 
 const isSpatialKey = (value?: string) => Boolean(value?.startsWith('/'));
+const isMissingFromValue = (value?: string) => {
+  if (!value) {
+    return true;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'nil' || normalized === 'null' || normalized === 'undefined';
+};
 
 const byNewest = (a: FeedItem, b: FeedItem) => {
   const aSeries = a.series ?? 0;
@@ -86,28 +94,34 @@ const buildEntries = (transactions: Transaction[]) => {
   const entries: FeedEntry[] = [];
 
   normalizeFeedTransactions(transactions).forEach((tx) => {
-    entries.push({
-      entryId: `${tx.txId}:memo`,
-      tx,
-      kind: 'memo',
-      path: normalizePath(tx.to),
-    });
+    if (isMissingFromValue(tx.from)) {
+      return;
+    }
+
+    if (isSpatialKey(tx.to)) {
+      entries.push({
+        entryId: `${tx.txId}:memo`,
+        tx,
+        kind: 'memo',
+        path: normalizePath(tx.to) ?? '../',
+      });
+    }
 
     if (!isSpatialKey(tx.to)) {
       entries.push({
         entryId: `${tx.txId}:drill-in`,
         tx,
         kind: 'drill_in',
-        path: null,
+        path: '../',
       });
     }
 
-    if (tx.from && !isSpatialKey(tx.from)) {
+    if (!isSpatialKey(tx.from)) {
       entries.push({
         entryId: `${tx.txId}:drill-out`,
         tx,
         kind: 'drill_out',
-        path: null,
+        path: '../',
       });
     }
   });
@@ -148,9 +162,7 @@ const MemoFeed = ({
 
   useEffect(() => {
     const activeEntry = feedEntries[activeIndex];
-    if (activeEntry?.path) {
-      onActivePathChange(activeEntry.path);
-    }
+    onActivePathChange(activeEntry?.path ?? '../');
   }, [activeIndex, feedEntries, onActivePathChange]);
 
   useEffect(() => {
@@ -208,6 +220,9 @@ const MemoFeed = ({
       {visibleEntries.map((entry) => {
         const { tx } = entry;
         const content = getMemoContent(tx.memo);
+        const drillLabel = content.type === 'text' || content.type === 'empty'
+          ? content.text.trim() || 'Switch navigator key'
+          : tx.memo?.trim() || 'Switch navigator key';
 
         return (
           <div
@@ -224,29 +239,23 @@ const MemoFeed = ({
               </IonCardHeader>
               <IonCardContent>
                 {entry.kind === 'drill_in' && (
-                  <>
-                    <IonText>
-                      <p style={{ marginTop: 0 }}>Drill-in entry: switch to destination navigator key.</p>
-                    </IonText>
-                    <IonButton size="small" fill="outline" onClick={() => onSwitchNavigator(tx.to)}>
-                      Drill in
+                  <div style={{ minHeight: '55vh', display: 'grid', placeItems: 'center' }}>
+                    <IonButton size="default" fill="outline" onClick={() => onSwitchNavigator(tx.to)}>
+                      {drillLabel}
                     </IonButton>
-                  </>
+                  </div>
                 )}
 
                 {entry.kind === 'drill_out' && (
-                  <>
-                    <IonText>
-                      <p style={{ marginTop: 0 }}>Drill-out entry: switch to source navigator key.</p>
-                    </IonText>
+                  <div style={{ minHeight: '55vh', display: 'grid', placeItems: 'center' }}>
                     <IonButton
-                      size="small"
+                      size="default"
                       fill="outline"
                       onClick={() => onSwitchNavigator(tx.from as string)}
                     >
-                      Drill out
+                      {drillLabel}
                     </IonButton>
-                  </>
+                  </div>
                 )}
 
                 {entry.kind === 'memo' && (
