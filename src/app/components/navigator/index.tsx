@@ -9,20 +9,32 @@ import {
   IonHeader,
   IonIcon,
   IonInput,
-  IonPage,
   IonItem,
   IonLabel,
   IonList,
+  IonPage,
   IonRange,
   IonToolbar,
 } from '@ionic/react';
-import { logoYoutube, sunnyOutline } from 'ionicons/icons';
+import { chevronDownOutline, chevronForwardOutline, logoYoutube, sunnyOutline } from 'ionicons/icons';
 import { useContext, useMemo, useState } from 'react';
 import { AppContext } from '../../utils/appContext';
 
 const CANDID_REEL_PUBLIC_KEY = 'GFyHkcnYf0+Og/DuhzXAFN0J5aOH+0k9RaJ58lOy5Mg=';
 const CANDID_LOG_PUBLIC_KEY = '13N00JsrSlMKF6T74CpNC65k4ETENYBuh2yM7r645VQ=';
 const DEFAULT_WINDOW_SIZE = 20_000;
+const DEFAULT_LIMIT = 500;
+
+const YOUTUBE_CHANNELS = [
+  {
+    label: 'Candid-Reel',
+    publicKey: CANDID_REEL_PUBLIC_KEY,
+  },
+  {
+    label: 'Candid-Log',
+    publicKey: CANDID_LOG_PUBLIC_KEY,
+  },
+];
 
 const Navigator = ({
   onDismiss,
@@ -47,8 +59,16 @@ const Navigator = ({
     `${Math.min(Math.max(transactionRange.endHeight, 0), maxHeight)}`,
   );
   const [limit, setLimit] = useState(`${transactionRange.limit}`);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const canSave = useMemo(() => publicKey.trim().length > 0, [publicKey]);
+
+  const applyDefaultWindow = (nextPublicKey: string) => {
+    setPublicKey(nextPublicKey);
+    setStartHeight(`${maxHeight}`);
+    setEndHeight(`${defaultEndHeight}`);
+    setLimit(`${DEFAULT_LIMIT}`);
+  };
 
   return (
     <IonPage>
@@ -70,7 +90,7 @@ const Navigator = ({
                 setTransactionRange({
                   startHeight: Math.max(normalizedStart, normalizedEnd),
                   endHeight: Math.min(normalizedStart, normalizedEnd),
-                  limit: Number(limit || 500),
+                  limit: Number(limit || DEFAULT_LIMIT),
                 });
                 onDismiss('confirm');
               }}
@@ -104,97 +124,104 @@ const Navigator = ({
           <IonCardContent>
             <IonList inset>
               <IonItem>
-                <IonLabel position="stacked">Public key</IonLabel>
-                <IonInput
-                  value={publicKey}
-                  placeholder="Enter a public key"
-                  onIonInput={(event) => setPublicKey(`${event.detail.value ?? ''}`)}
-                />
-                <IonButton
-                  slot="end"
-                  fill="clear"
-                  size="small"
-                  onClick={() => setPublicKey(CANDID_REEL_PUBLIC_KEY)}
-                >
-                  <IonIcon slot="start" icon={logoYoutube} />
-                  Candid-Reel
-                </IonButton>
-                <IonButton
-                  slot="end"
-                  fill="clear"
-                  size="small"
-                  onClick={() => setPublicKey(CANDID_LOG_PUBLIC_KEY)}
-                >
-                  <IonIcon slot="start" icon={logoYoutube} />
-                  Candid-Log
-                </IonButton>
+                {YOUTUBE_CHANNELS.map((channel) => (
+                  <IonButton
+                    key={channel.publicKey}
+                    slot="end"
+                    fill={publicKey === channel.publicKey ? 'solid' : 'clear'}
+                    size="small"
+                    onClick={() => applyDefaultWindow(channel.publicKey)}
+                  >
+                    <IonIcon slot="start" icon={logoYoutube} />
+                    {channel.label}
+                  </IonButton>
+                ))}
               </IonItem>
-              <IonItem>
-                <IonLabel position="stacked">Start height</IonLabel>
-                <IonInput
-                  type="number"
-                  min={0}
-                  value={startHeight}
-                  onIonInput={(event) => setStartHeight(`${event.detail.value ?? 0}`)}
+              <IonItem button detail={false} onClick={() => setShowAdvanced((value) => !value)}>
+                <IonIcon
+                  slot="start"
+                  icon={showAdvanced ? chevronDownOutline : chevronForwardOutline}
                 />
-                <IonButton
-                  slot="end"
-                  fill="clear"
-                  size="small"
-                  onClick={() => setStartHeight(`${maxHeight}`)}
-                >
-                  Tip
-                </IonButton>
+                <IonLabel>Advanced settings</IonLabel>
               </IonItem>
-              <IonItem>
-                <IonLabel position="stacked">End height</IonLabel>
-                <IonInput
-                  type="number"
-                  min={0}
-                  value={endHeight}
-                  onIonInput={(event) => setEndHeight(`${event.detail.value ?? 0}`)}
-                />
-                <IonButton
-                  slot="end"
-                  fill="clear"
-                  size="small"
-                  onClick={() => setEndHeight(`${defaultEndHeight}`)}
-                >
-                  -20k
-                </IonButton>
-              </IonItem>
-              <IonItem>
-                <IonLabel position="stacked">
-                  Height window ({endHeight} - {startHeight})
-                </IonLabel>
-                <IonRange
-                  dualKnobs
-                  min={0}
-                  max={maxHeight}
-                  step={1}
-                  value={{
-                    lower: Number(endHeight || 0),
-                    upper: Number(startHeight || 0),
-                  }}
-                  onIonChange={(event) => {
-                    const value = event.detail.value;
-                    if (typeof value === 'object' && value !== null) {
-                      setEndHeight(`${value.lower ?? 0}`);
-                      setStartHeight(`${value.upper ?? 0}`);
-                    }
-                  }}
-                />
-              </IonItem>
-              <IonItem>
-                <IonLabel position="stacked">Limit</IonLabel>
-                <IonInput
-                  type="number"
-                  min={1}
-                  value={limit}
-                  onIonInput={(event) => setLimit(`${event.detail.value ?? 500}`)}
-                  placeholder="500"
-                />
-              </IonItem>
+              {showAdvanced && (
+                <>
+                  <IonItem>
+                    <IonLabel position="stacked">Public key</IonLabel>
+                    <IonInput
+                      value={publicKey}
+                      placeholder="Enter a public key"
+                      onIonInput={(event) => setPublicKey(`${event.detail.value ?? ''}`)}
+                    />
+                  </IonItem>
+                  <IonItem>
+                    <IonLabel position="stacked">Start height</IonLabel>
+                    <IonInput
+                      type="number"
+                      min={0}
+                      value={startHeight}
+                      onIonInput={(event) => setStartHeight(`${event.detail.value ?? 0}`)}
+                    />
+                    <IonButton
+                      slot="end"
+                      fill="clear"
+                      size="small"
+                      onClick={() => setStartHeight(`${maxHeight}`)}
+                    >
+                      Tip
+                    </IonButton>
+                  </IonItem>
+                  <IonItem>
+                    <IonLabel position="stacked">End height</IonLabel>
+                    <IonInput
+                      type="number"
+                      min={0}
+                      value={endHeight}
+                      onIonInput={(event) => setEndHeight(`${event.detail.value ?? 0}`)}
+                    />
+                    <IonButton
+                      slot="end"
+                      fill="clear"
+                      size="small"
+                      onClick={() => setEndHeight(`${defaultEndHeight}`)}
+                    >
+                      -20k
+                    </IonButton>
+                  </IonItem>
+                  <IonItem>
+                    <IonLabel position="stacked">
+                      Height window ({endHeight} - {startHeight})
+                    </IonLabel>
+                    <IonRange
+                      dualKnobs
+                      min={0}
+                      max={maxHeight}
+                      step={1}
+                      value={{
+                        lower: Number(endHeight || 0),
+                        upper: Number(startHeight || 0),
+                      }}
+                      onIonChange={(event) => {
+                        const value = event.detail.value;
+                        if (typeof value === 'object' && value !== null) {
+                          setEndHeight(`${value.lower ?? 0}`);
+                          setStartHeight(`${value.upper ?? 0}`);
+                        }
+                      }}
+                    />
+                  </IonItem>
+                  <IonItem>
+                    <IonLabel position="stacked">Limit</IonLabel>
+                    <IonInput
+                      type="number"
+                      min={1}
+                      value={limit}
+                      onIonInput={(event) => setLimit(`${event.detail.value ?? DEFAULT_LIMIT}`)}
+                      placeholder={`${DEFAULT_LIMIT}`}
+                    />
+                  </IonItem>
+                </>
+              )}
             </IonList>
           </IonCardContent>
         </IonCard>
