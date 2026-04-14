@@ -124,7 +124,6 @@ const Navigator = ({
           <IonCardContent>
             <IonList inset>
               <IonItem>
-                <IonLabel position="stacked">YouTube navigator presets</IonLabel>
                 {YOUTUBE_CHANNELS.map((channel) => (
                   <IonButton
                     key={channel.publicKey}
